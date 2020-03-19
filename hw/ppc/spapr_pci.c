@@ -2014,7 +2014,7 @@ static int spapr_phb_children_reset(Object *child, void *opaque)
     DeviceState *dev = (DeviceState *) object_dynamic_cast(child, TYPE_DEVICE);
 
     if (dev) {
-        device_reset(dev);
+        device_legacy_reset(dev);
     }
 
     return 0;
@@ -2217,7 +2217,7 @@ static void spapr_phb_class_init(ObjectClass *klass, void *data)
     hc->root_bus_path = spapr_phb_root_bus_path;
     dc->realize = spapr_phb_realize;
     dc->unrealize = spapr_phb_unrealize;
-    dc->props = spapr_phb_properties;
+    device_class_set_props(dc, spapr_phb_properties);
     dc->reset = spapr_phb_reset;
     dc->vmsd = &vmstate_spapr_pci;
     /* Supported by TYPE_SPAPR_MACHINE */

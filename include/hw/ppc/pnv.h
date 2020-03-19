@@ -30,6 +30,8 @@
 #include "hw/ppc/pnv_homer.h"
 #include "hw/ppc/pnv_xive.h"
 #include "hw/ppc/pnv_core.h"
+#include "hw/pci-host/pnv_phb3.h"
+#include "hw/pci-host/pnv_phb4.h"
 
 #define TYPE_PNV_CHIP "pnv-chip"
 #define PNV_CHIP(obj) OBJECT_CHECK(PnvChip, (obj), TYPE_PNV_CHIP)
@@ -48,8 +50,11 @@ typedef struct PnvChip {
     uint64_t     ram_size;
 
     uint32_t     nr_cores;
+    uint32_t     nr_threads;
     uint64_t     cores_mask;
     PnvCore      **cores;
+
+    uint32_t     num_phbs;
 
     MemoryRegion xscom_mmio;
     MemoryRegion xscom;
@@ -72,6 +77,11 @@ typedef struct Pnv8Chip {
     Pnv8Psi      psi;
     PnvOCC       occ;
     PnvHomer     homer;
+
+#define PNV8_CHIP_PHB3_MAX 4
+    PnvPHB3      phbs[PNV8_CHIP_PHB3_MAX];
+
+    XICSFabric    *xics;
 } Pnv8Chip;
 
 #define TYPE_PNV9_CHIP "pnv9-chip"
@@ -90,6 +100,9 @@ typedef struct Pnv9Chip {
 
     uint32_t     nr_quads;
     PnvQuad      *quads;
+
+#define PNV9_CHIP_MAX_PEC 3
+    PnvPhb4PecState pecs[PNV9_CHIP_MAX_PEC];
 } Pnv9Chip;
 
 /*
@@ -117,6 +130,7 @@ typedef struct PnvChipClass {
     /*< public >*/
     uint64_t     chip_cfam_id;
     uint64_t     cores_mask;
+    uint32_t     num_phbs;
 
     DeviceRealize parent_realize;
 
@@ -214,9 +228,9 @@ struct PnvMachineState {
     Notifier     powerdown_notifier;
 
     PnvPnor      *pnor;
-};
 
-PnvChip *pnv_get_chip(uint32_t chip_id);
+    hwaddr       fw_load_addr;
+};
 
 #define PNV_FDT_ADDR          0x01000000
 #define PNV_TIMEBASE_FREQ     512000000ULL
@@ -226,7 +240,7 @@ PnvChip *pnv_get_chip(uint32_t chip_id);
  */
 void pnv_dt_bmc_sensors(IPMIBmc *bmc, void *fdt);
 void pnv_bmc_powerdown(IPMIBmc *bmc);
-IPMIBmc *pnv_bmc_create(void);
+IPMIBmc *pnv_bmc_create(PnvPnor *pnor);
 
 /*
  * POWER8 MMIO base addresses

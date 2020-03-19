@@ -154,14 +154,12 @@ static void virtio_ccw_register_hcalls(void)
                                    virtio_ccw_hcall_early_printk);
 }
 
-static void s390_memory_init(ram_addr_t mem_size)
+static void s390_memory_init(MemoryRegion *ram)
 {
     MemoryRegion *sysmem = get_system_memory();
-    MemoryRegion *ram = g_new(MemoryRegion, 1);
     Error *local_err = NULL;
 
     /* allocate RAM for core */
-    memory_region_allocate_system_memory(ram, NULL, "s390.ram", mem_size);
     memory_region_add_subregion(sysmem, 0, ram);
 
     /*
@@ -245,7 +243,7 @@ static void ccw_init(MachineState *machine)
 
     s390_sclp_init();
     /* init memory + setup max page size. Required for the CPU model */
-    s390_memory_init(machine->ram_size);
+    s390_memory_init(machine->ram);
 
     /* init CPUs (incl. CPU model) early so s390_has_feature() works */
     s390_init_cpus(machine);
@@ -471,6 +469,7 @@ static void ccw_machine_class_init(ObjectClass *oc, void *data)
     hc->plug = s390_machine_device_plug;
     hc->unplug_request = s390_machine_device_unplug_request;
     nc->nmi_monitor_handler = s390_nmi;
+    mc->default_ram_id = "s390.ram";
 }
 
 static inline bool machine_get_aes_key_wrap(Object *obj, Error **errp)
@@ -505,6 +504,19 @@ static inline void machine_set_dea_key_wrap(Object *obj, bool value,
 
 static S390CcwMachineClass *current_mc;
 
+/*
+ * Get the class of the s390-ccw-virtio machine that is currently in use.
+ * Note: libvirt is using the "none" machine to probe for the features of the
+ * host CPU, so in case this is called with the "none" machine, the function
+ * returns the TYPE_S390_CCW_MACHINE base class. In this base class, all the
+ * various "*_allowed" variables are enabled, so that the *_allowed() wrappers
+ * below return the correct default value for the "none" machine.
+ *
+ * Attention! Do *not* add additional new wrappers for CPU features (e.g. like
+ * the ri_allowed() wrapper) via this mechanism anymore. CPU features should
+ * be handled via the CPU models, i.e. checking with cpu_model_allowed() during
+ * CPU initialization and s390_has_feat() later should be sufficient.
+ */
 static S390CcwMachineClass *get_machine_class(void)
 {
     if (unlikely(!current_mc)) {
@@ -521,19 +533,16 @@ static S390CcwMachineClass *get_machine_class(void)
 
 bool ri_allowed(void)
 {
-    /* for "none" machine this results in true */
     return get_machine_class()->ri_allowed;
 }
 
 bool cpu_model_allowed(void)
 {
-    /* for "none" machine this results in true */
     return get_machine_class()->cpu_model_allowed;
 }
 
 bool hpage_1m_allowed(void)
 {
-    /* for "none" machine this results in true */
     return get_machine_class()->hpage_1m_allowed;
 }
 
@@ -621,7 +630,7 @@ bool css_migration_enabled(void)
         mc->desc = "VirtIO-ccw based S390 machine v" verstr;                  \
         if (latest) {                                                         \
             mc->alias = "s390-ccw-virtio";                                    \
-            mc->is_default = 1;                                               \
+            mc->is_default = true;                                            \
         }                                                                     \
     }                                                                         \
     static void ccw_machine_##suffix##_instance_init(Object *obj)             \

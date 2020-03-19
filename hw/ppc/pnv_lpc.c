@@ -238,16 +238,16 @@ static bool opb_read(PnvLpcController *lpc, uint32_t addr, uint8_t *data,
                      int sz)
 {
     /* XXX Handle access size limits and FW read caching here */
-    return !address_space_rw(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
-                             data, sz, false);
+    return !address_space_read(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
+                               data, sz);
 }
 
 static bool opb_write(PnvLpcController *lpc, uint32_t addr, uint8_t *data,
                       int sz)
 {
     /* XXX Handle access size limits here */
-    return !address_space_rw(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
-                             data, sz, true);
+    return !address_space_write(&lpc->opb_as, addr, MEMTXATTRS_UNSPECIFIED,
+                                data, sz);
 }
 
 #define ECCB_CTL_READ           PPC_BIT(15)
@@ -761,7 +761,8 @@ static void pnv_lpc_class_init(ObjectClass *klass, void *data)
 
     dc->realize = pnv_lpc_realize;
     dc->desc = "PowerNV LPC Controller";
-    dc->props = pnv_lpc_properties;
+    device_class_set_props(dc, pnv_lpc_properties);
+    dc->user_creatable = false;
 }
 
 static const TypeInfo pnv_lpc_info = {
@@ -825,9 +826,10 @@ ISABus *pnv_lpc_isa_create(PnvLpcController *lpc, bool use_cpld, Error **errp)
     qemu_irq *irqs;
     qemu_irq_handler handler;
     PnvMachineState *pnv = PNV_MACHINE(qdev_get_machine());
+    bool hostboot_mode = !!pnv->fw_load_addr;
 
     /* let isa_bus_new() create its own bridge on SysBus otherwise
-     * devices speficied on the command line won't find the bus and
+     * devices specified on the command line won't find the bus and
      * will fail to create.
      */
     isa_bus = isa_bus_new(NULL, &lpc->isa_mem, &lpc->isa_io, &local_err);
@@ -859,7 +861,9 @@ ISABus *pnv_lpc_isa_create(PnvLpcController *lpc, bool use_cpld, Error **errp)
      * Start disabled. The HIOMAP protocol will activate the mapping
      * with HIOMAP_C_CREATE_WRITE_WINDOW
      */
-    memory_region_set_enabled(&pnv->pnor->mmio, false);
+    if (!hostboot_mode) {
+        memory_region_set_enabled(&pnv->pnor->mmio, false);
+    }
 
     return isa_bus;
 }

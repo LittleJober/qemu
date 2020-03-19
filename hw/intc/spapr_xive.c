@@ -286,9 +286,16 @@ static void spapr_xive_instance_init(Object *obj)
 static void spapr_xive_realize(DeviceState *dev, Error **errp)
 {
     SpaprXive *xive = SPAPR_XIVE(dev);
+    SpaprXiveClass *sxc = SPAPR_XIVE_GET_CLASS(xive);
     XiveSource *xsrc = &xive->source;
     XiveENDSource *end_xsrc = &xive->end_source;
     Error *local_err = NULL;
+
+    sxc->parent_realize(dev, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return;
+    }
 
     if (!xive->nr_irqs) {
         error_setg(errp, "Number of interrupt needs to be greater 0");
@@ -594,7 +601,7 @@ static int spapr_xive_cpu_intc_create(SpaprInterruptController *intc,
     Object *obj;
     SpaprCpuState *spapr_cpu = spapr_cpu_state(cpu);
 
-    obj = xive_tctx_create(OBJECT(cpu), XIVE_ROUTER(xive), errp);
+    obj = xive_tctx_create(OBJECT(cpu), XIVE_PRESENTER(xive), errp);
     if (!obj) {
         return -1;
     }
@@ -670,8 +677,8 @@ static void spapr_xive_dt(SpaprInterruptController *intc, uint32_t nr_servers,
     uint64_t timas[2 * 2];
     /* Interrupt number ranges for the IPIs */
     uint32_t lisn_ranges[] = {
-        cpu_to_be32(0),
-        cpu_to_be32(nr_servers),
+        cpu_to_be32(SPAPR_IRQ_IPI),
+        cpu_to_be32(SPAPR_IRQ_IPI + nr_servers),
     };
     /*
      * EQ size - the sizes of pages supported by the system 4K, 64K,
@@ -760,10 +767,12 @@ static void spapr_xive_class_init(ObjectClass *klass, void *data)
     XiveRouterClass *xrc = XIVE_ROUTER_CLASS(klass);
     SpaprInterruptControllerClass *sicc = SPAPR_INTC_CLASS(klass);
     XivePresenterClass *xpc = XIVE_PRESENTER_CLASS(klass);
+    SpaprXiveClass *sxc = SPAPR_XIVE_CLASS(klass);
 
     dc->desc    = "sPAPR XIVE Interrupt Controller";
-    dc->props   = spapr_xive_properties;
-    dc->realize = spapr_xive_realize;
+    device_class_set_props(dc, spapr_xive_properties);
+    device_class_set_parent_realize(dc, spapr_xive_realize,
+                                    &sxc->parent_realize);
     dc->vmsd    = &vmstate_spapr_xive;
 
     xrc->get_eas = spapr_xive_get_eas;
@@ -794,6 +803,7 @@ static const TypeInfo spapr_xive_info = {
     .instance_init = spapr_xive_instance_init,
     .instance_size = sizeof(SpaprXive),
     .class_init = spapr_xive_class_init,
+    .class_size = sizeof(SpaprXiveClass),
     .interfaces = (InterfaceInfo[]) {
         { TYPE_SPAPR_INTC },
         { }
@@ -1756,7 +1766,7 @@ static target_ulong h_int_reset(PowerPCCPU *cpu,
         return H_PARAMETER;
     }
 
-    device_reset(DEVICE(xive));
+    device_legacy_reset(DEVICE(xive));
 
     if (kvm_irqchip_in_kernel()) {
         Error *local_err = NULL;

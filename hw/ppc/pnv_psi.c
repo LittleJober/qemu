@@ -455,7 +455,7 @@ static const MemoryRegionOps pnv_psi_xscom_ops = {
     }
 };
 
-static void pnv_psi_reset(void *dev)
+static void pnv_psi_reset(DeviceState *dev)
 {
     PnvPsi *psi = PNV_PSI(dev);
 
@@ -464,12 +464,29 @@ static void pnv_psi_reset(void *dev)
     psi->regs[PSIHB_XSCOM_BAR] = psi->bar | PSIHB_BAR_EN;
 }
 
+static void pnv_psi_reset_handler(void *dev)
+{
+    device_legacy_reset(DEVICE(dev));
+}
+
+static void pnv_psi_realize(DeviceState *dev, Error **errp)
+{
+    PnvPsi *psi = PNV_PSI(dev);
+
+    /* Default BAR for MMIO region */
+    pnv_psi_set_bar(psi, psi->bar | PSIHB_BAR_EN);
+
+    qemu_register_reset(pnv_psi_reset_handler, dev);
+}
+
 static void pnv_psi_power8_instance_init(Object *obj)
 {
     Pnv8Psi *psi8 = PNV8_PSI(obj);
 
     object_initialize_child(obj, "ics-psi",  &psi8->ics, sizeof(psi8->ics),
                             TYPE_ICS, &error_abort, NULL);
+    object_property_add_alias(obj, ICS_PROP_XICS, OBJECT(&psi8->ics),
+                              ICS_PROP_XICS, &error_abort);
 }
 
 static const uint8_t irq_to_xivr[] = {
@@ -485,19 +502,10 @@ static void pnv_psi_power8_realize(DeviceState *dev, Error **errp)
 {
     PnvPsi *psi = PNV_PSI(dev);
     ICSState *ics = &PNV8_PSI(psi)->ics;
-    Object *obj;
     Error *err = NULL;
     unsigned int i;
 
-    obj = object_property_get_link(OBJECT(dev), "xics", &err);
-    if (!obj) {
-        error_setg(errp, "%s: required link 'xics' not found: %s",
-                   __func__, error_get_pretty(err));
-        return;
-    }
-
     /* Create PSI interrupt control source */
-    object_property_set_link(OBJECT(ics), obj, ICS_PROP_XICS, &error_abort);
     object_property_set_int(OBJECT(ics), PSI_NUM_INTERRUPTS, "nr-irqs", &err);
     if (err) {
         error_propagate(errp, err);
@@ -523,9 +531,6 @@ static void pnv_psi_power8_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&psi->regs_mr, OBJECT(dev), &psi_mmio_ops, psi,
                           "psihb", PNV_PSIHB_SIZE);
 
-    /* Default BAR for MMIO region */
-    pnv_psi_set_bar(psi, psi->bar | PSIHB_BAR_EN);
-
     /* Default sources in XIVR */
     for (i = 0; i < PSI_NUM_INTERRUPTS; i++) {
         uint8_t xivr = irq_to_xivr[i];
@@ -533,7 +538,7 @@ static void pnv_psi_power8_realize(DeviceState *dev, Error **errp)
             ((uint64_t) i << PSIHB_XIVR_SRC_SH);
     }
 
-    qemu_register_reset(pnv_psi_reset, dev);
+    pnv_psi_realize(dev, errp);
 }
 
 static int pnv_psi_dt_xscom(PnvXScomInterface *dev, void *fdt, int xscom_offset)
@@ -710,7 +715,7 @@ static void pnv_psi_p9_mmio_write(void *opaque, hwaddr addr,
         break;
     case PSIHB9_INTERRUPT_CONTROL:
         if (val & PSIHB9_IRQ_RESET) {
-            device_reset(DEVICE(&psi9->source));
+            device_legacy_reset(DEVICE(&psi9->source));
         }
         psi->regs[reg] = val;
         break;
@@ -816,7 +821,7 @@ static void pnv_psi_power9_irq_set(PnvPsi *psi, int irq, bool state)
     qemu_set_irq(psi->qirqs[irq], state);
 }
 
-static void pnv_psi_power9_reset(void *dev)
+static void pnv_psi_power9_reset(DeviceState *dev)
 {
     Pnv9Psi *psi = PNV9_PSI(dev);
 
@@ -868,9 +873,7 @@ static void pnv_psi_power9_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&psi->regs_mr, OBJECT(dev), &pnv_psi_p9_mmio_ops, psi,
                           "psihb", PNV9_PSIHB_SIZE);
 
-    pnv_psi_set_bar(psi, psi->bar | PSIHB_BAR_EN);
-
-    qemu_register_reset(pnv_psi_power9_reset, dev);
+    pnv_psi_realize(dev, errp);
 }
 
 static void pnv_psi_power9_class_init(ObjectClass *klass, void *data)
@@ -882,6 +885,7 @@ static void pnv_psi_power9_class_init(ObjectClass *klass, void *data)
 
     dc->desc    = "PowerNV PSI Controller POWER9";
     dc->realize = pnv_psi_power9_realize;
+    dc->reset   = pnv_psi_power9_reset;
 
     ppc->xscom_pcba = PNV9_XSCOM_PSIHB_BASE;
     ppc->xscom_size = PNV9_XSCOM_PSIHB_SIZE;
@@ -933,7 +937,8 @@ static void pnv_psi_class_init(ObjectClass *klass, void *data)
     xdc->dt_xscom = pnv_psi_dt_xscom;
 
     dc->desc = "PowerNV PSI Controller";
-    dc->props = pnv_psi_properties;
+    device_class_set_props(dc, pnv_psi_properties);
+    dc->reset = pnv_psi_reset;
 }
 
 static const TypeInfo pnv_psi_info = {

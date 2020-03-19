@@ -328,7 +328,7 @@ struct setup_data {
     uint64_t next;
     uint32_t type;
     uint32_t len;
-    uint8_t data[0];
+    uint8_t data[];
 } __attribute__((packed));
 
 
@@ -413,7 +413,7 @@ static bool load_elfboot(const char *kernel_filename,
     uint64_t elf_note_type = XEN_ELFNOTE_PHYS32_ENTRY;
     kernel_size = load_elf(kernel_filename, read_pvh_start_addr,
                            NULL, &elf_note_type, &elf_entry,
-                           &elf_low, &elf_high, 0, I386_ELF_MACHINE,
+                           &elf_low, &elf_high, NULL, 0, I386_ELF_MACHINE,
                            0, 0);
 
     if (kernel_size < 0) {
@@ -612,6 +612,7 @@ void x86_load_linux(X86MachineState *x86ms,
     vmode = strstr(kernel_cmdline, "vga=");
     if (vmode) {
         unsigned int video_mode;
+        const char *end;
         int ret;
         /* skip "vga=" */
         vmode += 4;
@@ -622,10 +623,9 @@ void x86_load_linux(X86MachineState *x86ms,
         } else if (!strncmp(vmode, "ask", 3)) {
             video_mode = 0xfffd;
         } else {
-            ret = qemu_strtoui(vmode, NULL, 0, &video_mode);
-            if (ret != 0) {
-                fprintf(stderr, "qemu: can't parse 'vga' parameter: %s\n",
-                        strerror(-ret));
+            ret = qemu_strtoui(vmode, &end, 0, &video_mode);
+            if (ret != 0 || (*end && *end != ' ')) {
+                fprintf(stderr, "qemu: invalid 'vga=' kernel parameter.\n");
                 exit(1);
             }
         }

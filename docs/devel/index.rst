@@ -24,3 +24,5 @@ Contents:
    tcg
    tcg-plugins
    bitops
+   reset
+   s390-dasd-ipl

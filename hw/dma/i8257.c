@@ -553,7 +553,7 @@ static void i8257_realize(DeviceState *dev, Error **errp)
     I8257State *d = I8257(dev);
     int i;
 
-    memory_region_init_io(&d->channel_io, NULL, &channel_io_ops, d,
+    memory_region_init_io(&d->channel_io, OBJECT(dev), &channel_io_ops, d,
                           "dma-chan", 8 << d->dshift);
     memory_region_add_subregion(isa_address_space_io(isa),
                                 d->base, &d->channel_io);
@@ -595,7 +595,7 @@ static void i8257_class_init(ObjectClass *klass, void *data)
     dc->realize = i8257_realize;
     dc->reset = i8257_reset;
     dc->vmsd = &vmstate_i8257;
-    dc->props = i8257_properties;
+    device_class_set_props(dc, i8257_properties);
 
     idc->get_transfer_mode = i8257_dma_get_transfer_mode;
     idc->has_autoinitialization = i8257_dma_has_autoinitialization;

@@ -36,11 +36,6 @@
 
 #define TARGET_INSN_START_EXTRA_WORDS 2
 
-#define MMU_MODE0_SUFFIX _primary
-#define MMU_MODE1_SUFFIX _secondary
-#define MMU_MODE2_SUFFIX _home
-#define MMU_MODE3_SUFFIX _real
-
 #define MMU_USER_IDX 0
 
 #define S390_MAX_CPUS 248
@@ -281,7 +276,8 @@ extern const VMStateDescription vmstate_s390_cpu;
 #define PSW_MASK_RI             0x0000008000000000ULL
 #define PSW_MASK_64             0x0000000100000000ULL
 #define PSW_MASK_32             0x0000000080000000ULL
-#define PSW_MASK_ESA_ADDR       0x000000007fffffffULL
+#define PSW_MASK_SHORT_ADDR     0x000000007fffffffULL
+#define PSW_MASK_SHORT_CTRL     0xffffffff80000000ULL
 
 #undef PSW_ASC_PRIMARY
 #undef PSW_ASC_ACCREG

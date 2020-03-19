@@ -1,4 +1,3 @@
-from __future__ import print_function
 # Common utilities and Python wrappers for qemu-iotests
 #
 # Copyright (C) 2012 IBM Corp.
@@ -65,6 +64,7 @@ test_dir = os.environ.get('TEST_DIR')
 sock_dir = os.environ.get('SOCK_DIR')
 output_dir = os.environ.get('OUTPUT_DIR', '.')
 cachemode = os.environ.get('CACHEMODE')
+aiomode = os.environ.get('AIOMODE')
 qemu_default_machine = os.environ.get('QEMU_DEFAULT_MACHINE')
 
 socket_scm_helper = os.environ.get('SOCKET_SCM_HELPER', 'socket_scm_helper')
@@ -495,6 +495,7 @@ class VM(qtest.QEMUQtestMachine):
             options.append('file=%s' % path)
             options.append('format=%s' % format)
             options.append('cache=%s' % cachemode)
+            options.append('aio=%s' % aiomode)
 
         if opts:
             options.append(opts)
@@ -623,7 +624,10 @@ class VM(qtest.QEMUQtestMachine):
                         if use_log:
                             log('Job failed: %s' % (j['error']))
             elif status == 'ready':
-                self.qmp_log('job-complete', id=job)
+                if use_log:
+                    self.qmp_log('job-complete', id=job)
+                else:
+                    self.qmp('job-complete', id=job)
             elif status == 'pending' and not auto_finalize:
                 if pre_finalize:
                     pre_finalize()
@@ -668,12 +672,16 @@ class VM(qtest.QEMUQtestMachine):
             }
         ]))
 
-    def wait_migration(self):
+    def wait_migration(self, expect_runstate):
         while True:
             event = self.event_wait('MIGRATION')
             log(event, filters=[filter_qmp_event])
             if event['data']['status'] == 'completed':
                 break
+        # The event may occur in finish-migrate, so wait for the expected
+        # post-migration runstate
+        while self.qmp('query-status')['return']['status'] != expect_runstate:
+            pass
 
     def node_info(self, node_name):
         nodes = self.qmp('query-named-block-nodes')
@@ -709,6 +717,65 @@ class VM(qtest.QEMUQtestMachine):
 
         return fields.items() <= ret.items()
 
+    def assert_block_path(self, root, path, expected_node, graph=None):
+        """
+        Check whether the node under the given path in the block graph
+        is @expected_node.
+
+        @root is the node name of the node where the @path is rooted.
+
+        @path is a string that consists of child names separated by
+        slashes.  It must begin with a slash.
+
+        Examples for @root + @path:
+          - root="qcow2-node", path="/backing/file"
+          - root="quorum-node", path="/children.2/file"
+
+        Hypothetically, @path could be empty, in which case it would
+        point to @root.  However, in practice this case is not useful
+        and hence not allowed.
+
+        @expected_node may be None.  (All elements of the path but the
+        leaf must still exist.)
+
+        @graph may be None or the result of an x-debug-query-block-graph
+        call that has already been performed.
+        """
+        if graph is None:
+            graph = self.qmp('x-debug-query-block-graph')['return']
+
+        iter_path = iter(path.split('/'))
+
+        # Must start with a /
+        assert next(iter_path) == ''
+
+        node = next((node for node in graph['nodes'] if node['name'] == root),
+                    None)
+
+        # An empty @path is not allowed, so the root node must be present
+        assert node is not None, 'Root node %s not found' % root
+
+        for child_name in iter_path:
+            assert node is not None, 'Cannot follow path %s%s' % (root, path)
+
+            try:
+                node_id = next(edge['child'] for edge in graph['edges'] \
+                                             if edge['parent'] == node['id'] and
+                                                edge['name'] == child_name)
+
+                node = next(node for node in graph['nodes'] \
+                                 if node['id'] == node_id)
+            except StopIteration:
+                node = None
+
+        if node is None:
+            assert expected_node is None, \
+                   'No node found under %s (but expected %s)' % \
+                   (path, expected_node)
+        else:
+            assert node['name'] == expected_node, \
+                   'Found node %s under %s (but expected %s)' % \
+                   (node['name'], path, expected_node)
 
 index_re = re.compile(r'([^\[]+)\[([^\]]+)\]')
 
@@ -811,15 +878,20 @@ class QMPTestCase(unittest.TestCase):
         self.assert_no_active_block_jobs()
         return result
 
-    def wait_until_completed(self, drive='drive0', check_offset=True, wait=60.0):
+    def wait_until_completed(self, drive='drive0', check_offset=True, wait=60.0,
+                             error=None):
         '''Wait for a block job to finish, returning the event'''
         while True:
             for event in self.vm.get_qmp_events(wait=wait):
                 if event['event'] == 'BLOCK_JOB_COMPLETED':
                     self.assert_qmp(event, 'data/device', drive)
-                    self.assert_qmp_absent(event, 'data/error')
-                    if check_offset:
-                        self.assert_qmp(event, 'data/offset', event['data']['len'])
+                    if error is None:
+                        self.assert_qmp_absent(event, 'data/error')
+                        if check_offset:
+                            self.assert_qmp(event, 'data/offset',
+                                            event['data']['len'])
+                    else:
+                        self.assert_qmp(event, 'data/error', error)
                     self.assert_no_active_block_jobs()
                     return event
                 elif event['event'] == 'JOB_STATUS_CHANGE':
@@ -837,7 +909,8 @@ class QMPTestCase(unittest.TestCase):
         self.assert_qmp(event, 'data/type', 'mirror')
         self.assert_qmp(event, 'data/offset', event['data']['len'])
 
-    def complete_and_wait(self, drive='drive0', wait_ready=True):
+    def complete_and_wait(self, drive='drive0', wait_ready=True,
+                          completion_error=None):
         '''Complete a block job and wait for it to finish'''
         if wait_ready:
             self.wait_ready(drive=drive)
@@ -845,7 +918,7 @@ class QMPTestCase(unittest.TestCase):
         result = self.vm.qmp('block-job-complete', device=drive)
         self.assert_qmp(result, 'return', {})
 
-        event = self.wait_until_completed(drive=drive)
+        event = self.wait_until_completed(drive=drive, error=completion_error)
         self.assert_qmp(event, 'data/type', 'mirror')
 
     def pause_wait(self, job_id='job0'):
@@ -919,13 +992,22 @@ def verify_protocol(supported=[], unsupported=[]):
     if not_sup or (imgproto in unsupported):
         notrun('not suitable for this protocol: %s' % imgproto)
 
-def verify_platform(supported_oses=['linux']):
-    if True not in [sys.platform.startswith(x) for x in supported_oses]:
-        notrun('not suitable for this OS: %s' % sys.platform)
+def verify_platform(supported=None, unsupported=None):
+    if unsupported is not None:
+        if any((sys.platform.startswith(x) for x in unsupported)):
+            notrun('not suitable for this OS: %s' % sys.platform)
+
+    if supported is not None:
+        if not any((sys.platform.startswith(x) for x in supported)):
+            notrun('not suitable for this OS: %s' % sys.platform)
 
 def verify_cache_mode(supported_cache_modes=[]):
     if supported_cache_modes and (cachemode not in supported_cache_modes):
         notrun('not suitable for this cache mode: %s' % cachemode)
+
+def verify_aio_mode(supported_aio_modes=[]):
+    if supported_aio_modes and (aiomode not in supported_aio_modes):
+        notrun('not suitable for this aio mode: %s' % aiomode)
 
 def supports_quorum():
     return 'quorum' in qemu_img_pipe('--help')
@@ -1012,9 +1094,11 @@ def execute_unittest(output, verbosity, debug):
             sys.stderr.write(out)
 
 def execute_test(test_function=None,
-                 supported_fmts=[], supported_oses=['linux'],
-                 supported_cache_modes=[], unsupported_fmts=[],
-                 supported_protocols=[], unsupported_protocols=[]):
+                 supported_fmts=[],
+                 supported_platforms=None,
+                 supported_cache_modes=[], supported_aio_modes={},
+                 unsupported_fmts=[], supported_protocols=[],
+                 unsupported_protocols=[]):
     """Run either unittest or script-style tests."""
 
     # We are using TEST_DIR and QEMU_DEFAULT_MACHINE as proxies to
@@ -1029,8 +1113,9 @@ def execute_test(test_function=None,
     verbosity = 1
     verify_image_format(supported_fmts, unsupported_fmts)
     verify_protocol(supported_protocols, unsupported_protocols)
-    verify_platform(supported_oses)
+    verify_platform(supported=supported_platforms)
     verify_cache_mode(supported_cache_modes)
+    verify_aio_mode(supported_aio_modes)
 
     if debug:
         output = sys.stdout

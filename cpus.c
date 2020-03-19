@@ -53,7 +53,7 @@
 #include "qemu/bitmap.h"
 #include "qemu/seqlock.h"
 #include "qemu/guest-random.h"
-#include "tcg.h"
+#include "tcg/tcg.h"
 #include "hw/nmi.h"
 #include "sysemu/replay.h"
 #include "sysemu/runstate.h"
@@ -1026,9 +1026,9 @@ static int do_vm_stop(RunState state, bool send_stop)
     int ret = 0;
 
     if (runstate_is_running()) {
+        runstate_set(state);
         cpu_disable_ticks();
         pause_all_vcpus();
-        runstate_set(state);
         vm_state_notify(0, state);
         if (send_stop) {
             qapi_event_send_stop();
@@ -1316,6 +1316,10 @@ static int64_t tcg_get_icount_limit(void)
          */
         deadline = qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL,
                                               QEMU_TIMER_ATTR_ALL);
+        /* Check realtime timers, because they help with input processing */
+        deadline = qemu_soonest_timeout(deadline,
+                qemu_clock_deadline_ns_all(QEMU_CLOCK_REALTIME,
+                                           QEMU_TIMER_ATTR_ALL));
 
         /* Maintain prior (possibly buggy) behaviour where if no deadline
          * was set (as there is no QEMU_CLOCK_VIRTUAL timer) or it is more than
@@ -1835,6 +1839,11 @@ void qemu_mutex_unlock_iothread(void)
     qemu_mutex_unlock(&qemu_global_mutex);
 }
 
+void qemu_cond_wait_iothread(QemuCond *cond)
+{
+    qemu_cond_wait(cond, &qemu_global_mutex);
+}
+
 static bool all_vcpus_paused(void)
 {
     CPUState *cpu;
@@ -1889,6 +1898,10 @@ void cpu_resume(CPUState *cpu)
 void resume_all_vcpus(void)
 {
     CPUState *cpu;
+
+    if (!runstate_is_running()) {
+        return;
+    }
 
     qemu_clock_enable(QEMU_CLOCK_VIRTUAL, true);
     CPU_FOREACH(cpu) {

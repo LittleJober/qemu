@@ -832,7 +832,6 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
     IVShmemState *s = IVSHMEM_COMMON(dev);
     Error *err = NULL;
     uint8_t *pci_conf;
-    Error *local_err = NULL;
 
     /* IRQFD requires MSI */
     if (ivshmem_has_feature(s, IVSHMEM_IOEVENTFD) &&
@@ -899,9 +898,9 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
     if (!ivshmem_is_master(s)) {
         error_setg(&s->migration_blocker,
                    "Migration is disabled when using feature 'peer mode' in device 'ivshmem'");
-        migrate_add_blocker(s->migration_blocker, &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
+        migrate_add_blocker(s->migration_blocker, &err);
+        if (err) {
+            error_propagate(errp, err);
             error_free(s->migration_blocker);
             return;
         }
@@ -1055,7 +1054,7 @@ static void ivshmem_plain_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
     k->realize = ivshmem_plain_realize;
-    dc->props = ivshmem_plain_properties;
+    device_class_set_props(dc, ivshmem_plain_properties);
     dc->vmsd = &ivshmem_plain_vmsd;
 }
 
@@ -1115,7 +1114,7 @@ static void ivshmem_doorbell_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
     k->realize = ivshmem_doorbell_realize;
-    dc->props = ivshmem_doorbell_properties;
+    device_class_set_props(dc, ivshmem_doorbell_properties);
     dc->vmsd = &ivshmem_doorbell_vmsd;
 }
 

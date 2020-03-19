@@ -28,6 +28,16 @@
 
 import os
 import sys
+import sphinx
+from sphinx.errors import VersionRequirementError
+
+# Make Sphinx fail cleanly if using an old Python, rather than obscurely
+# failing because some code in one of our extensions doesn't work there.
+# Unfortunately this doesn't display very neatly (there's an unavoidable
+# Python backtrace) but at least the information gets printed...
+if sys.version_info < (3,5):
+    raise VersionRequirementError(
+        "QEMU requires a Sphinx that uses Python 3.5 or better\n")
 
 # The per-manual conf.py will set qemu_docdir for a single-manual build;
 # otherwise set it here if this is an entire-manual-set build.
@@ -54,7 +64,7 @@ needs_sphinx = '1.3'
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['kerneldoc', 'qmp_lexer']
+extensions = ['kerneldoc', 'qmp_lexer', 'hxtool']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -122,6 +132,12 @@ suppress_warnings = ["ref.option"]
 # style document building; our Makefile always sets the variable.
 confdir = os.getenv('CONFDIR', "/etc/qemu")
 rst_epilog = ".. |CONFDIR| replace:: ``" + confdir + "``\n"
+# We slurp in the defs.rst.inc and literally include it into rst_epilog,
+# because Sphinx's include:: directive doesn't work with absolute paths
+# and there isn't any one single relative path that will work for all
+# documents and for both via-make and direct sphinx-build invocation.
+with open(os.path.join(qemu_docdir, 'defs.rst.inc')) as f:
+    rst_epilog += f.read()
 
 # -- Options for HTML output ----------------------------------------------
 
@@ -221,3 +237,4 @@ texinfo_documents = [
 # find everything.
 kerneldoc_bin = os.path.join(qemu_docdir, '../scripts/kernel-doc')
 kerneldoc_srctree = os.path.join(qemu_docdir, '..')
+hxtool_srctree = os.path.join(qemu_docdir, '..')
